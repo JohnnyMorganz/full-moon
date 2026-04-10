@@ -992,14 +992,11 @@ impl ConstAssignment {
 
 impl fmt::Display for ConstAssignment {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        let attributes = std::iter::repeat_with(|| None::<TokenReference>);
-        let type_specifiers = self.type_specifiers().chain(std::iter::repeat(None));
-
         write!(
             formatter,
             "{}{}{}{}",
             self.const_token,
-            join_iterators(&self.name_list, attributes, type_specifiers),
+            join_type_specifiers(&self.name_list, self.type_specifiers()),
             display_option(&self.equal_token),
             self.expr_list
         )

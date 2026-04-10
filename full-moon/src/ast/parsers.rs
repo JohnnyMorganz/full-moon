@@ -1317,7 +1317,7 @@ fn expect_const_assignment(
             state.token_error_ranged(
                 const_assignment.const_token.clone(),
                 "const declaration must have an assignment",
-                &const_assignment.const_token.clone(),
+                &const_assignment.const_token,
                 &last_name,
             );
             return Ok(const_assignment);
