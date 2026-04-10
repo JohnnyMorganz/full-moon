@@ -3,6 +3,55 @@
 use super::*;
 use crate::visitors::{Visit, VisitMut, Visitor, VisitorMut};
 
+impl Visit for ConstAssignment {
+    fn visit<V: Visitor>(&self, visitor: &mut V) {
+        visitor.visit_const_assignment(self);
+        self.const_token.visit(visitor);
+
+        let mut type_specifiers = self.type_specifiers();
+
+        for name in &self.name_list {
+            name.visit(visitor);
+            type_specifiers.next().visit(visitor);
+        }
+
+        self.equal_token.visit(visitor);
+        self.expr_list.visit(visitor);
+        visitor.visit_const_assignment_end(self);
+    }
+}
+
+impl VisitMut for ConstAssignment {
+    fn visit_mut<V: VisitorMut>(mut self, visitor: &mut V) -> Self {
+        self = visitor.visit_const_assignment(self);
+        self.const_token = self.const_token.visit_mut(visitor);
+
+        let mut type_specifiers = self.type_specifiers.into_iter();
+
+        let mut new_type_specifiers = Vec::new();
+        let mut new_names = Punctuated::new();
+
+        for parameter_pair in self.name_list.into_pairs() {
+            let parameter_tuple = parameter_pair.into_tuple();
+            let parameter = parameter_tuple.0.visit_mut(visitor);
+            let type_specifier = type_specifiers
+                .next()
+                .flatten()
+                .map(|type_specifier| type_specifier.visit_mut(visitor));
+            let punctuation = parameter_tuple.1.visit_mut(visitor);
+            new_type_specifiers.push(type_specifier);
+            new_names.push(Pair::new(parameter, punctuation));
+        }
+
+        self.name_list = new_names;
+        self.type_specifiers = new_type_specifiers;
+        self.equal_token = self.equal_token.visit_mut(visitor);
+        self.expr_list = self.expr_list.visit_mut(visitor);
+        self = visitor.visit_const_assignment_end(self);
+        self
+    }
+}
+
 // The following have `ContainedSpan`, which when automatically derived will visit the tokens containing
 // before they visit what they're actually containing.
 // For example, if there is an AST node that represents `(foo)`...

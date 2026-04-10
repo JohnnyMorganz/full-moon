@@ -4,8 +4,8 @@ expression: ast.nodes()
 input_file: full-moon/tests/roblox_cases/pass/const_variable
 ---
 stmts:
-  - - LocalAssignment:
-        local_token:
+  - - ConstAssignment:
+        const_token:
           leading_trivia: []
           token:
             start_position:
@@ -115,8 +115,8 @@ stmts:
                         type: Whitespace
                         characters: "\n"
     - ~
-  - - LocalAssignment:
-        local_token:
+  - - ConstAssignment:
+        const_token:
           leading_trivia: []
           token:
             start_position:
@@ -291,8 +291,8 @@ stmts:
                             type: Whitespace
                             characters: "\n"
     - ~
-  - - LocalAssignment:
-        local_token:
+  - - ConstAssignment:
+        const_token:
           leading_trivia: []
           token:
             start_position:
@@ -512,8 +512,8 @@ stmts:
                                       type: Whitespace
                                       characters: " "
     - ~
-  - - LocalAssignment:
-        local_token:
+  - - ConstAssignment:
+        const_token:
           leading_trivia: []
           token:
             start_position:
@@ -666,8 +666,8 @@ stmts:
                         type: Whitespace
                         characters: "\n"
     - ~
-  - - LocalAssignment:
-        local_token:
+  - - ConstAssignment:
+        const_token:
           leading_trivia: []
           token:
             start_position:
@@ -858,8 +858,8 @@ stmts:
                         type: Whitespace
                         characters: "\n"
     - ~
-  - - LocalAssignment:
-        local_token:
+  - - ConstAssignment:
+        const_token:
           leading_trivia: []
           token:
             start_position:

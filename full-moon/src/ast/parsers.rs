@@ -444,12 +444,12 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                                     match next_token_type {
                                         TokenType::Identifier { .. } => {
                                             return ParserResult::Value(StmtVariant::Stmt(
-                                                ast::Stmt::LocalAssignment(
-                                                    match expect_local_assignment(
+                                                ast::Stmt::ConstAssignment(
+                                                    match expect_const_assignment(
                                                         state,
                                                         const_token,
                                                     ) {
-                                                        Ok(la) => la,
+                                                        Ok(ca) => ca,
                                                         Err(()) => {
                                                             return ParserResult::LexerMoved
                                                         }
@@ -463,19 +463,19 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                                         } => {
                                             let function_token =
                                                 state.consume().unwrap();
-                                            let local_function =
-                                                match expect_local_function_declaration(
+                                            let const_function =
+                                                match expect_const_function_declaration(
                                                     state,
                                                     const_token,
                                                     function_token,
                                                 ) {
-                                                    Ok(lf) => lf,
+                                                    Ok(cf) => cf,
                                                     Err(()) => {
                                                         return ParserResult::LexerMoved
                                                     }
                                                 };
                                             return ParserResult::Value(StmtVariant::Stmt(
-                                                ast::Stmt::LocalFunction(local_function),
+                                                ast::Stmt::ConstFunction(const_function),
                                             ));
                                         }
 
@@ -720,10 +720,41 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                         Err(()) => ParserResult::LexerMoved,
                     }
                 }
+                Ok(token)
+                    if matches!(token.token_type(), TokenType::Identifier { identifier } if identifier.as_str() == "const") =>
+                {
+                    let const_token = state.consume().unwrap();
+                    match state.current() {
+                        Ok(token) if token.is_symbol(Symbol::Function) => {
+                            let function_token = state.consume().unwrap();
+
+                            let const_function = match expect_const_function_declaration(
+                                state,
+                                const_token,
+                                function_token,
+                            ) {
+                                Ok(const_function) => const_function,
+                                Err(()) => return ParserResult::LexerMoved,
+                            };
+
+                            ParserResult::Value(StmtVariant::Stmt(ast::Stmt::ConstFunction(
+                                const_function.with_attributes(attributes),
+                            )))
+                        }
+                        Ok(token) => {
+                            state.token_error(
+                                token.clone(),
+                                "expected `const function` after attribute",
+                            );
+                            ParserResult::LexerMoved
+                        }
+                        Err(()) => ParserResult::LexerMoved,
+                    }
+                }
                 Ok(token) => {
                     state.token_error(
                         token.clone(),
-                        "expected `function` or `local function` after attribute",
+                        "expected `function`, `local function`, or `const function` after attribute",
                     );
                     ParserResult::LexerMoved
                 }
@@ -1243,6 +1274,105 @@ fn expect_local_assignment(
     };
 
     Ok(local_assignment)
+}
+
+#[cfg(feature = "luau")]
+fn expect_const_assignment(
+    state: &mut ParserState,
+    const_token: TokenReference,
+) -> Result<ast::ConstAssignment, ()> {
+    let names = match one_or_more(state, parse_name_with_type_specifiers, Symbol::Comma) {
+        ParserResult::Value(names) => names,
+        ParserResult::NotFound => {
+            unreachable!("expect_const_assignment called without upcoming identifier");
+        }
+        ParserResult::LexerMoved => return Err(()),
+    };
+
+    let mut name_list = Punctuated::new();
+    let mut type_specifiers = Vec::new();
+
+    for name in names.into_pairs() {
+        let (name, punctuation) = name.into_tuple();
+        type_specifiers.push(name.type_specifier);
+        name_list.push(match punctuation {
+            Some(punctuation) => Pair::Punctuated(name.name, punctuation),
+            None => Pair::End(name.name),
+        });
+    }
+
+    let mut const_assignment = ast::ConstAssignment {
+        const_token,
+        name_list,
+        type_specifiers,
+        equal_token: None,
+        expr_list: Punctuated::new(),
+    };
+
+    const_assignment.equal_token = match state.consume_if_symbols(&[Symbol::Equal]) {
+        Some(equal_token) => Some(equal_token),
+        None => {
+            // const declarations must be initialized
+            let last_name = const_assignment.name_list.last().unwrap().value().clone();
+            state.token_error_ranged(
+                const_assignment.const_token.clone(),
+                "const declaration must have an assignment",
+                &const_assignment.const_token.clone(),
+                &last_name,
+            );
+            return Ok(const_assignment);
+        }
+    };
+
+    match parse_expression_list(state) {
+        ParserResult::Value(expr_list) => const_assignment.expr_list = expr_list,
+
+        ParserResult::NotFound => {
+            state.token_error(
+                const_assignment.equal_token.clone().unwrap(),
+                "expected an expression",
+            );
+        }
+
+        ParserResult::LexerMoved => {}
+    };
+
+    Ok(const_assignment)
+}
+
+#[cfg(feature = "luau")]
+fn expect_const_function_declaration(
+    state: &mut ParserState,
+    const_token: TokenReference,
+    function_token: TokenReference,
+) -> Result<ast::ConstFunction, ()> {
+    let function_name = match state.current() {
+        Ok(token) if token.token_kind() == TokenKind::Identifier => state.consume().unwrap(),
+
+        Ok(token) => {
+            state.token_error(token.clone(), "expected a function name");
+            return Err(());
+        }
+
+        Err(()) => return Err(()),
+    };
+
+    let function_body = match parse_function_body(state) {
+        ParserResult::Value(function_body) => function_body,
+        ParserResult::NotFound => {
+            state.token_error(function_token, "expected a function body");
+            return Err(());
+        }
+        ParserResult::LexerMoved => return Err(()),
+    };
+
+    Ok(ast::ConstFunction {
+        attributes: Vec::new(),
+        const_token,
+        function_token,
+        name: function_name,
+        body: function_body,
+    })
 }
 
 fn expect_expression_key(

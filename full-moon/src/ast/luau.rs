@@ -893,6 +893,212 @@ impl ExportedTypeFunction {
     }
 }
 
+/// An assignment to a const variable, such as `const x = 1`
+#[derive(Clone, Debug, PartialEq, Node)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+pub struct ConstAssignment {
+    pub(crate) const_token: TokenReference,
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "empty_optional_vector")
+    )]
+    pub(crate) type_specifiers: Vec<Option<TypeSpecifier>>,
+    pub(crate) name_list: Punctuated<TokenReference>,
+    pub(crate) equal_token: Option<TokenReference>,
+    pub(crate) expr_list: Punctuated<Expression>,
+}
+
+impl ConstAssignment {
+    /// Returns a new ConstAssignment from the given name list
+    pub fn new(name_list: Punctuated<TokenReference>) -> Self {
+        Self {
+            const_token: TokenReference::new(
+                Vec::new(),
+                Token::new(TokenType::Identifier {
+                    identifier: "const".into(),
+                }),
+                vec![Token::new(TokenType::spaces(1))],
+            ),
+            type_specifiers: Vec::new(),
+            name_list,
+            equal_token: None,
+            expr_list: Punctuated::new(),
+        }
+    }
+
+    /// The `const` token
+    pub fn const_token(&self) -> &TokenReference {
+        &self.const_token
+    }
+
+    /// The `=` token in between `const x = y`, if one exists
+    pub fn equal_token(&self) -> Option<&TokenReference> {
+        self.equal_token.as_ref()
+    }
+
+    /// Returns the punctuated sequence of the expressions being assigned.
+    /// This is the `1, 2` part of `const x, y = 1, 2`
+    pub fn expressions(&self) -> &Punctuated<Expression> {
+        &self.expr_list
+    }
+
+    /// Returns the punctuated sequence of names being assigned to.
+    /// This is the `x, y` part of `const x, y = 1, 2`
+    pub fn names(&self) -> &Punctuated<TokenReference> {
+        &self.name_list
+    }
+
+    /// The type specifiers of the variables, in the order that they were assigned.
+    /// `const foo: number, bar, baz: boolean` returns an iterator containing:
+    /// `Some(TypeSpecifier(number)), None, Some(TypeSpecifier(boolean))`
+    pub fn type_specifiers(&self) -> impl Iterator<Item = Option<&TypeSpecifier>> {
+        self.type_specifiers.iter().map(Option::as_ref)
+    }
+
+    /// Returns a new ConstAssignment with the given `const` token
+    pub fn with_const_token(self, const_token: TokenReference) -> Self {
+        Self {
+            const_token,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstAssignment with the given type specifiers
+    pub fn with_type_specifiers(self, type_specifiers: Vec<Option<TypeSpecifier>>) -> Self {
+        Self {
+            type_specifiers,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstAssignment with the given name list
+    pub fn with_names(self, name_list: Punctuated<TokenReference>) -> Self {
+        Self { name_list, ..self }
+    }
+
+    /// Returns a new ConstAssignment with the given `=` token
+    pub fn with_equal_token(self, equal_token: Option<TokenReference>) -> Self {
+        Self {
+            equal_token,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstAssignment with the given expression list
+    pub fn with_expressions(self, expr_list: Punctuated<Expression>) -> Self {
+        Self { expr_list, ..self }
+    }
+}
+
+impl fmt::Display for ConstAssignment {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let attributes = std::iter::repeat_with(|| None::<TokenReference>);
+        let type_specifiers = self.type_specifiers().chain(std::iter::repeat(None));
+
+        write!(
+            formatter,
+            "{}{}{}{}",
+            self.const_token,
+            join_iterators(&self.name_list, attributes, type_specifiers),
+            display_option(&self.equal_token),
+            self.expr_list
+        )
+    }
+}
+
+/// A declaration of a const function, such as `const function x() end`
+#[derive(Clone, Debug, Display, PartialEq, Node, Visit)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[display("{}{}{}{}{}",
+    join_vec(attributes),
+    const_token,
+    function_token,
+    name,
+    body
+)]
+pub struct ConstFunction {
+    pub(crate) attributes: Vec<LuauAttribute>,
+    pub(crate) const_token: TokenReference,
+    pub(crate) function_token: TokenReference,
+    pub(crate) name: TokenReference,
+    pub(crate) body: FunctionBody,
+}
+
+impl ConstFunction {
+    /// Returns a new ConstFunction from the given name
+    pub fn new(name: TokenReference) -> Self {
+        ConstFunction {
+            attributes: Vec::new(),
+            const_token: TokenReference::new(
+                Vec::new(),
+                Token::new(TokenType::Identifier {
+                    identifier: "const".into(),
+                }),
+                vec![Token::new(TokenType::spaces(1))],
+            ),
+            function_token: TokenReference::basic_symbol("function "),
+            name,
+            body: FunctionBody::new(),
+        }
+    }
+
+    /// The attributes on the function, e.g. `@native`
+    pub fn attributes(&self) -> impl Iterator<Item = &LuauAttribute> {
+        self.attributes.iter()
+    }
+
+    /// The `const` token
+    pub fn const_token(&self) -> &TokenReference {
+        &self.const_token
+    }
+
+    /// The `function` token
+    pub fn function_token(&self) -> &TokenReference {
+        &self.function_token
+    }
+
+    /// The function body, everything except `const function x` in `const function x(a, b, c) call() end`
+    pub fn body(&self) -> &FunctionBody {
+        &self.body
+    }
+
+    /// The name of the function, the `x` part of `const function x() end`
+    pub fn name(&self) -> &TokenReference {
+        &self.name
+    }
+
+    /// Returns a new ConstFunction with the given attributes (e.g. `@native`)
+    pub fn with_attributes(self, attributes: Vec<LuauAttribute>) -> Self {
+        Self { attributes, ..self }
+    }
+
+    /// Returns a new ConstFunction with the given `const` token
+    pub fn with_const_token(self, const_token: TokenReference) -> Self {
+        Self {
+            const_token,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstFunction with the given `function` token
+    pub fn with_function_token(self, function_token: TokenReference) -> Self {
+        Self {
+            function_token,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstFunction with the given name
+    pub fn with_name(self, name: TokenReference) -> Self {
+        Self { name, ..self }
+    }
+
+    /// Returns a new ConstFunction with the given function body
+    pub fn with_body(self, body: FunctionBody) -> Self {
+        Self { body, ..self }
+    }
+}
+
 /// A compound assignment operator, such as `+=`, `-=`, etc.
 /// This has been moved to `compound.rs` since CfxLua makes use of it as well.
 #[cfg(not(feature = "luau"))]

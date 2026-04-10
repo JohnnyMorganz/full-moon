@@ -4,9 +4,9 @@ expression: ast.nodes()
 input_file: full-moon/tests/roblox_cases/pass/const_function
 ---
 stmts:
-  - - LocalFunction:
+  - - ConstFunction:
         attributes: []
-        local_token:
+        const_token:
           leading_trivia: []
           token:
             start_position:
@@ -148,9 +148,9 @@ stmts:
                   type: Whitespace
                   characters: "\n"
     - ~
-  - - LocalFunction:
+  - - ConstFunction:
         attributes: []
-        local_token:
+        const_token:
           leading_trivia: []
           token:
             start_position:

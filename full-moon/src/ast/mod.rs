@@ -479,6 +479,16 @@ pub enum Stmt {
     #[cfg(any(feature = "luau", feature = "cfxlua"))]
     #[display("{_0}")]
     CompoundAssignment(CompoundAssignment),
+    /// A const variable assignment, such as `const x = 1`
+    /// Only available when the "luau" feature flag is enabled.
+    #[cfg(feature = "luau")]
+    #[display("{_0}")]
+    ConstAssignment(ConstAssignment),
+    /// A const function declaration, such as `const function x() end`
+    /// Only available when the "luau" feature flag is enabled.
+    #[cfg(feature = "luau")]
+    #[display("{_0}")]
+    ConstFunction(ConstFunction),
     /// An exported type declaration, such as `export type Meters = number`
     /// Only available when the "luau" feature flag is enabled.
     #[cfg(feature = "luau")]
