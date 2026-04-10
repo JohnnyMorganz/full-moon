@@ -431,6 +431,65 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                                         ast::LastStmt::Continue(continue_token),
                                     ));
                                 }
+                                TokenType::Identifier { identifier }
+                                    if identifier.as_str() == "const" =>
+                                {
+                                    let const_token = token;
+
+                                    let next_token_type = match state.current() {
+                                        Ok(next) => next.token_type().clone(),
+                                        Err(()) => return ParserResult::LexerMoved,
+                                    };
+
+                                    match next_token_type {
+                                        TokenType::Identifier { .. } => {
+                                            return ParserResult::Value(StmtVariant::Stmt(
+                                                ast::Stmt::LocalAssignment(
+                                                    match expect_local_assignment(
+                                                        state,
+                                                        const_token,
+                                                    ) {
+                                                        Ok(la) => la,
+                                                        Err(()) => {
+                                                            return ParserResult::LexerMoved
+                                                        }
+                                                    },
+                                                ),
+                                            ));
+                                        }
+
+                                        TokenType::Symbol {
+                                            symbol: Symbol::Function,
+                                        } => {
+                                            let function_token =
+                                                state.consume().unwrap();
+                                            let local_function =
+                                                match expect_local_function_declaration(
+                                                    state,
+                                                    const_token,
+                                                    function_token,
+                                                ) {
+                                                    Ok(lf) => lf,
+                                                    Err(()) => {
+                                                        return ParserResult::LexerMoved
+                                                    }
+                                                };
+                                            return ParserResult::Value(StmtVariant::Stmt(
+                                                ast::Stmt::LocalFunction(local_function),
+                                            ));
+                                        }
+
+                                        _ => {
+                                            if let Ok(t) = state.current() {
+                                                state.token_error(
+                                                    t.clone(),
+                                                    "expected a variable name or `function` after `const`",
+                                                );
+                                            }
+                                            return ParserResult::LexerMoved;
+                                        }
+                                    }
+                                }
                                 _ => (),
                             }
                         }
