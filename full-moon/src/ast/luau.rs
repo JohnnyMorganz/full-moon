@@ -1271,6 +1271,12 @@ pub struct TypeInstantiation {
     pub(crate) types: Punctuated<TypeInfo>,
 }
 
+impl Default for TypeInstantiation {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeInstantiation {
     /// Creates an empty TypeInstantiation
     pub fn new() -> Self {
