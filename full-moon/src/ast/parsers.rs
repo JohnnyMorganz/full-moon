@@ -2574,6 +2574,16 @@ fn parse_type(state: &mut ParserState) -> ParserResult<ast::TypeInfo> {
 
 #[cfg(feature = "luau")]
 fn parse_type_or_pack(state: &mut ParserState) -> ParserResult<ast::TypeInfo> {
+    // A leading | or & can only start a union/intersection type, never a type pack
+    if let Ok(current_token) = state.current() {
+        if let TokenType::Symbol {
+            symbol: Symbol::Pipe | Symbol::Ampersand,
+        } = current_token.token_type()
+        {
+            return parse_type_suffix(state, None);
+        }
+    }
+
     let ParserResult::Value(simple_type) = parse_simple_type(state, SimpleTypeStyle::AllowPack)
     else {
         return ParserResult::LexerMoved;
