@@ -1325,7 +1325,35 @@ fn expect_const_assignment(
     };
 
     match parse_expression_list(state) {
-        ParserResult::Value(expr_list) => const_assignment.expr_list = expr_list,
+        ParserResult::Value(expr_list) => {
+            const_assignment.expr_list = expr_list;
+
+            let name_count = const_assignment.name_list.len();
+            let expr_count = const_assignment.expr_list.len();
+
+            let last_can_expand = const_assignment
+                .expr_list
+                .last()
+                .map(|expr| match expr.value() {
+                    ast::Expression::FunctionCall(_) => true,
+                    ast::Expression::Symbol(t) => t.is_symbol(Symbol::Ellipsis),
+                    _ => false,
+                })
+                .unwrap_or(false);
+
+            if !last_can_expand && name_count != expr_count {
+                state.token_error(
+                    const_assignment.const_token.clone(),
+                    format!(
+                        "const declaration has {} name{} but {} value{}",
+                        name_count,
+                        if name_count == 1 { "" } else { "s" },
+                        expr_count,
+                        if expr_count == 1 { "" } else { "s" },
+                    ),
+                );
+            }
+        }
 
         ParserResult::NotFound => {
             state.token_error(
