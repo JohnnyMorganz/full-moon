@@ -51,7 +51,7 @@ impl Node for ContainedSpan {
         self.tokens.0.similar(&other.tokens.0) && self.tokens.1.similar(&other.tokens.1)
     }
 
-    fn tokens(&self) -> Tokens {
+    fn tokens(&self) -> Tokens<'_> {
         self.tokens.tokens()
     }
 }
