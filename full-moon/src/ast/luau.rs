@@ -1006,7 +1006,8 @@ impl fmt::Display for ConstAssignment {
 /// A declaration of a const function, such as `const function x() end`
 #[derive(Clone, Debug, Display, PartialEq, Node, Visit)]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-#[display("{}{}{}{}{}",
+#[display(
+    "{}{}{}{}{}",
     join_vec(attributes),
     const_token,
     function_token,

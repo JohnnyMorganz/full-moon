@@ -450,9 +450,7 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                                                         const_token,
                                                     ) {
                                                         Ok(ca) => ca,
-                                                        Err(()) => {
-                                                            return ParserResult::LexerMoved
-                                                        }
+                                                        Err(()) => return ParserResult::LexerMoved,
                                                     },
                                                 ),
                                             ));
@@ -461,8 +459,7 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                                         TokenType::Symbol {
                                             symbol: Symbol::Function,
                                         } => {
-                                            let function_token =
-                                                state.consume().unwrap();
+                                            let function_token = state.consume().unwrap();
                                             let const_function =
                                                 match expect_const_function_declaration(
                                                     state,
@@ -470,9 +467,7 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                                                     function_token,
                                                 ) {
                                                     Ok(cf) => cf,
-                                                    Err(()) => {
-                                                        return ParserResult::LexerMoved
-                                                    }
+                                                    Err(()) => return ParserResult::LexerMoved,
                                                 };
                                             return ParserResult::Value(StmtVariant::Stmt(
                                                 ast::Stmt::ConstFunction(const_function),
@@ -720,8 +715,7 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                         Err(()) => ParserResult::LexerMoved,
                     }
                 }
-                Ok(token)
-                    if matches!(token.token_type(), TokenType::Identifier { identifier } if identifier.as_str() == "const") =>
+                Ok(token) if matches!(token.token_type(), TokenType::Identifier { identifier } if identifier.as_str() == "const") =>
                 {
                     let const_token = state.consume().unwrap();
                     match state.current() {
