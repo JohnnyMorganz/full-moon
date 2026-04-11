@@ -224,7 +224,7 @@ impl<T: Node> Node for Punctuated<T> {
             .similar(&other.into_iter().collect::<Vec<_>>())
     }
 
-    fn tokens(&self) -> Tokens {
+    fn tokens(&self) -> Tokens<'_> {
         self.pairs.tokens()
     }
 }
@@ -457,7 +457,7 @@ impl<T: Node> Node for Pair<T> {
         self.value().similar(other.value())
     }
 
-    fn tokens(&self) -> Tokens {
+    fn tokens(&self) -> Tokens<'_> {
         match self {
             Pair::Punctuated(node, separator) => {
                 let mut items = node.tokens().items;
