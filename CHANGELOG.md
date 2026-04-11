@@ -6,6 +6,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+- Luau: fixed leading `|` and `&` not parsing in generic type arguments, e.g. `Box<| string | number>` (#350)
+- Luau: fixed leading `|` and `&` not parsing in function type return types, e.g. `() -> | string | number`
+
 ## [2.1.1] - 2026-01-22
 ### Fixed
 - Fixed docs not compiling.
