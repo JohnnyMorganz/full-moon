@@ -3,11 +3,12 @@
 //! It will be renamed to "luau" in the future.
 use super::{punctuated::Punctuated, span::ContainedSpan, *};
 use crate::{
-    util::display_option,
+    util::{display_option, empty_optional_vector, join_iterators, join_vec},
     visitors::{Visit, VisitMut},
     ShortString,
 };
 use derive_more::Display;
+use std::fmt;
 
 /// Any type, such as `string`, `boolean?`, `number | boolean`, etc.
 #[derive(Clone, Debug, Display, PartialEq, Node)]
@@ -1206,21 +1207,21 @@ impl<'a> Iterator for ExpressionsIterator<'a> {
     }
 }
 
-/// An attribute, such as `@native`
+/// An attribute, such as `@native`, `@[native]`, or `@[deprecated("use bar instead")]`
 #[derive(Clone, Debug, Display, PartialEq, Node, Visit)]
 #[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
-#[display("{at_sign}{name}")]
+#[display("{at_sign}{kind}")]
 pub struct LuauAttribute {
     pub(crate) at_sign: TokenReference,
-    pub(crate) name: TokenReference,
+    pub(crate) kind: LuauAttributeKind,
 }
 
 impl LuauAttribute {
-    /// Creates a new ElseIf from the given condition
+    /// Creates a new LuauAttribute with the given name in bare (unbracketed) form
     pub fn new(name: TokenReference) -> Self {
         Self {
             at_sign: TokenReference::symbol("@").unwrap(),
-            name,
+            kind: LuauAttributeKind::Name(name),
         }
     }
 
@@ -1229,9 +1230,25 @@ impl LuauAttribute {
         &self.at_sign
     }
 
-    /// The name of the attribute, `native` in `@native`
-    pub fn name(&self) -> &TokenReference {
-        &self.name
+    /// The name of the attribute, `native` in `@native`. `None` for a bracketed
+    /// list with more than one attribute in it -- use [`LuauAttribute::kind`] for that.
+    pub fn name(&self) -> Option<&TokenReference> {
+        match &self.kind {
+            LuauAttributeKind::Name(name) => Some(name),
+            LuauAttributeKind::Bracketed { attributes, .. } => {
+                if attributes.len() == 1 {
+                    attributes.iter().next().map(|item| item.name())
+                } else {
+                    None
+                }
+            }
+        }
+    }
+
+    /// The contents of the attribute after the `@`: either a bare name, or a
+    /// bracketed (`@[...]`) list of one or more named attributes with optional params.
+    pub fn kind(&self) -> &LuauAttributeKind {
+        &self.kind
     }
 
     /// Returns a new Attribute with the given `@` token
@@ -1239,9 +1256,324 @@ impl LuauAttribute {
         Self { at_sign, ..self }
     }
 
-    /// Returns a new Attribute with the given name
+    /// Returns a new Attribute with the given kind
+    pub fn with_kind(self, kind: LuauAttributeKind) -> Self {
+        Self { kind, ..self }
+    }
+}
+
+/// The contents of a [`LuauAttribute`] after the `@` sign.
+// NOTE: Visit/VisitMut are implemented manually in `luau_visitors.rs`, since the derive
+// macro doesn't support `#[visit(contains = "...")]` on enum variants (it would otherwise
+// visit the closing `]` before the attributes it contains).
+#[derive(Clone, Debug, Display, PartialEq, Node)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+pub enum LuauAttributeKind {
+    /// A bare attribute name with no brackets, such as `native` in `@native`
+    #[display("{_0}")]
+    Name(TokenReference),
+
+    /// A bracketed list of one or more attributes, such as `[native]` in `@[native]`,
+    /// or `[native, deprecated("reason")]` in `@[native, deprecated("reason")]`
+    #[display("{}{}{}", brackets.tokens().0, attributes, brackets.tokens().1)]
+    Bracketed {
+        /// The `[` and `]` surrounding the attribute list
+        #[node(full_range)]
+        brackets: ContainedSpan,
+        /// The comma separated attributes within the brackets
+        attributes: Punctuated<LuauAttributeItem>,
+    },
+}
+
+/// A single named attribute with optional params, as used within a bracketed
+/// attribute list: the `deprecated("reason")` in `@[deprecated("reason")]`
+#[derive(Clone, Debug, Display, PartialEq, Node, Visit)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[display("{name}{}", display_option(params))]
+pub struct LuauAttributeItem {
+    pub(crate) name: TokenReference,
+    pub(crate) params: Option<LuauAttributeParams>,
+}
+
+impl LuauAttributeItem {
+    /// Creates a new LuauAttributeItem with the given name and no params
+    pub fn new(name: TokenReference) -> Self {
+        Self { name, params: None }
+    }
+
+    /// The name of the attribute, e.g. `deprecated` in `deprecated("reason")`
+    pub fn name(&self) -> &TokenReference {
+        &self.name
+    }
+
+    /// The params passed to the attribute, if any
+    pub fn params(&self) -> Option<&LuauAttributeParams> {
+        self.params.as_ref()
+    }
+
+    /// Returns a new LuauAttributeItem with the given name
     pub fn with_name(self, name: TokenReference) -> Self {
         Self { name, ..self }
+    }
+
+    /// Returns a new LuauAttributeItem with the given params
+    pub fn with_params(self, params: Option<LuauAttributeParams>) -> Self {
+        Self { params, ..self }
+    }
+}
+
+/// The params passed to a single attribute within a bracketed attribute list.
+// NOTE: Visit/VisitMut are implemented manually in `luau_visitors.rs`, for the same
+// reason as `LuauAttributeKind` above.
+#[derive(Clone, Debug, Display, PartialEq, Node)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+pub enum LuauAttributeParams {
+    /// Parenthesized, comma separated literal arguments, such as `("a", "b")` in
+    /// `@[deprecated("a", "b")]`
+    #[display("{}{}{}", parens.tokens().0, arguments, parens.tokens().1)]
+    Parens {
+        /// The `(` and `)` surrounding the arguments
+        #[node(full_range)]
+        parens: ContainedSpan,
+        /// The literal arguments passed to the attribute
+        arguments: Punctuated<LuauAttributeArgument>,
+    },
+
+    /// A single literal argument with no surrounding parens, such as `"reason"` in
+    /// `@[deprecated "reason"]`
+    #[display("{_0}")]
+    Literal(LuauAttributeArgument),
+}
+
+/// A literal value passed as a parameter to a [`LuauAttribute`] -- the RFC only
+/// allows literals here (nil/bool/number/string/table), not arbitrary expressions.
+#[derive(Clone, Debug, Display, PartialEq, Node, Visit)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+pub enum LuauAttributeArgument {
+    /// The `nil` literal
+    #[display("{_0}")]
+    Nil(TokenReference),
+    /// The `true` literal
+    #[display("{_0}")]
+    True(TokenReference),
+    /// The `false` literal
+    #[display("{_0}")]
+    False(TokenReference),
+    /// A number literal, such as `1` or `3.5`
+    #[display("{_0}")]
+    Number(TokenReference),
+    /// A string literal, such as `"foo"`
+    #[display("{_0}")]
+    Str(TokenReference),
+    /// A table constructor literal, such as `{ foo = "bar" }`
+    #[display("{_0}")]
+    Table(TableConstructor),
+}
+
+/// An assignment declared with `const`, such as `const x = 1`. `const` is a
+/// contextual keyword valid anywhere `local` is, with the caveat that (unlike
+/// `local`) an initializer is required.
+#[derive(Clone, Debug, PartialEq, Node, Visit)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+pub struct ConstAssignment {
+    pub(crate) const_token: TokenReference,
+    #[cfg_attr(
+        feature = "serde",
+        serde(skip_serializing_if = "empty_optional_vector")
+    )]
+    pub(crate) type_specifiers: Vec<Option<TypeSpecifier>>,
+    pub(crate) name_list: Punctuated<TokenReference>,
+    pub(crate) equal_token: Option<TokenReference>,
+    pub(crate) expr_list: Punctuated<Expression>,
+}
+
+// `const` is a contextual keyword, not a real symbol in the tokenizer (it's just an
+// identifier that the parser treats specially in statement-start position), so unlike
+// `local` it can't be built with `TokenReference::basic_symbol`.
+fn const_token_reference() -> TokenReference {
+    TokenReference::new(
+        Vec::new(),
+        Token::new(TokenType::Identifier {
+            identifier: "const".into(),
+        }),
+        vec![Token::new(TokenType::spaces(1))],
+    )
+}
+
+impl ConstAssignment {
+    /// Creates a new ConstAssignment from the given name list
+    pub fn new(name_list: Punctuated<TokenReference>) -> Self {
+        Self {
+            const_token: const_token_reference(),
+            type_specifiers: Vec::new(),
+            name_list,
+            equal_token: None,
+            expr_list: Punctuated::new(),
+        }
+    }
+
+    /// The `const` token
+    pub fn const_token(&self) -> &TokenReference {
+        &self.const_token
+    }
+
+    /// The `=` token in between `const x = y`, if one exists
+    pub fn equal_token(&self) -> Option<&TokenReference> {
+        self.equal_token.as_ref()
+    }
+
+    /// Returns the punctuated sequence of the expressions being assigned.
+    /// This is the `1, 2` part of `const x, y = 1, 2`
+    pub fn expressions(&self) -> &Punctuated<Expression> {
+        &self.expr_list
+    }
+
+    /// Returns the punctuated sequence of names being assigned to.
+    /// This is the `x, y` part of `const x, y = 1, 2`
+    pub fn names(&self) -> &Punctuated<TokenReference> {
+        &self.name_list
+    }
+
+    /// The type specifiers of the variables, in the order that they were assigned.
+    /// `const foo: number, bar` returns an iterator containing:
+    /// `Some(TypeSpecifier(number)), None`
+    pub fn type_specifiers(&self) -> impl Iterator<Item = Option<&TypeSpecifier>> {
+        self.type_specifiers.iter().map(Option::as_ref)
+    }
+
+    /// Returns a new ConstAssignment with the given `const` token
+    pub fn with_const_token(self, const_token: TokenReference) -> Self {
+        Self {
+            const_token,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstAssignment with the given type specifiers
+    pub fn with_type_specifiers(self, type_specifiers: Vec<Option<TypeSpecifier>>) -> Self {
+        Self {
+            type_specifiers,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstAssignment with the given name list
+    pub fn with_names(self, name_list: Punctuated<TokenReference>) -> Self {
+        Self { name_list, ..self }
+    }
+
+    /// Returns a new ConstAssignment with the given `=` token
+    pub fn with_equal_token(self, equal_token: Option<TokenReference>) -> Self {
+        Self {
+            equal_token,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstAssignment with the given expression list
+    pub fn with_expressions(self, expr_list: Punctuated<Expression>) -> Self {
+        Self { expr_list, ..self }
+    }
+}
+
+impl fmt::Display for ConstAssignment {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let type_specifiers = self.type_specifiers().chain(std::iter::repeat(None));
+
+        write!(
+            formatter,
+            "{}{}{}{}",
+            self.const_token,
+            join_iterators(
+                &self.name_list,
+                type_specifiers,
+                std::iter::repeat_with(|| None::<TokenReference>)
+            ),
+            display_option(&self.equal_token),
+            self.expr_list
+        )
+    }
+}
+
+/// A declaration of a function with `const`, such as `const function x() end`,
+/// equivalent to `local function x() end` but using the `const` keyword.
+#[derive(Clone, Debug, Display, PartialEq, Node, Visit)]
+#[cfg_attr(feature = "serde", derive(Deserialize, Serialize))]
+#[display("{}{}{}{}{}", join_vec(attributes), const_token, function_token, name, body)]
+pub struct ConstFunction {
+    pub(crate) attributes: Vec<LuauAttribute>,
+    pub(crate) const_token: TokenReference,
+    pub(crate) function_token: TokenReference,
+    pub(crate) name: TokenReference,
+    pub(crate) body: FunctionBody,
+}
+
+impl ConstFunction {
+    /// Returns a new ConstFunction from the given name
+    pub fn new(name: TokenReference) -> Self {
+        ConstFunction {
+            attributes: Vec::new(),
+            const_token: const_token_reference(),
+            function_token: TokenReference::basic_symbol("function "),
+            name,
+            body: FunctionBody::new(),
+        }
+    }
+
+    /// The attributes in the function, e.g. `@native`
+    pub fn attributes(&self) -> impl Iterator<Item = &LuauAttribute> {
+        self.attributes.iter()
+    }
+
+    /// The `const` token
+    pub fn const_token(&self) -> &TokenReference {
+        &self.const_token
+    }
+
+    /// The `function` token
+    pub fn function_token(&self) -> &TokenReference {
+        &self.function_token
+    }
+
+    /// The function body, everything except `const function x` in `const function x(a, b, c) call() end`
+    pub fn body(&self) -> &FunctionBody {
+        &self.body
+    }
+
+    /// The name of the function, the `x` part of `const function x() end`
+    pub fn name(&self) -> &TokenReference {
+        &self.name
+    }
+
+    /// Returns a new ConstFunction with the given attributes (e.g. `@native`)
+    pub fn with_attributes(self, attributes: Vec<LuauAttribute>) -> Self {
+        Self { attributes, ..self }
+    }
+
+    /// Returns a new ConstFunction with the given `const` token
+    pub fn with_const_token(self, const_token: TokenReference) -> Self {
+        Self {
+            const_token,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstFunction with the given `function` token
+    pub fn with_function_token(self, function_token: TokenReference) -> Self {
+        Self {
+            function_token,
+            ..self
+        }
+    }
+
+    /// Returns a new ConstFunction with the given name
+    pub fn with_name(self, name: TokenReference) -> Self {
+        Self { name, ..self }
+    }
+
+    /// Returns a new ConstFunction with the given function body
+    pub fn with_body(self, body: FunctionBody) -> Self {
+        Self { body, ..self }
     }
 }
 

@@ -431,6 +431,65 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                                         ast::LastStmt::Continue(continue_token),
                                     ));
                                 }
+                                TokenType::Identifier { identifier }
+                                    if identifier.as_str() == "const" =>
+                                {
+                                    let const_token = token;
+
+                                    match state.current() {
+                                        Ok(next_token)
+                                            if next_token.token_kind()
+                                                == TokenKind::Identifier =>
+                                        {
+                                            return ParserResult::Value(StmtVariant::Stmt(
+                                                ast::Stmt::ConstAssignment(
+                                                    match expect_const_assignment(
+                                                        state,
+                                                        const_token,
+                                                    ) {
+                                                        Ok(const_assignment) => const_assignment,
+                                                        Err(()) => {
+                                                            return ParserResult::LexerMoved
+                                                        }
+                                                    },
+                                                ),
+                                            ));
+                                        }
+
+                                        Ok(next_token)
+                                            if next_token.is_symbol(Symbol::Function) =>
+                                        {
+                                            let function_token = state.consume().unwrap();
+
+                                            let const_function =
+                                                match expect_const_function_declaration(
+                                                    state,
+                                                    const_token,
+                                                    function_token,
+                                                ) {
+                                                    Ok(const_function) => const_function,
+                                                    Err(()) => {
+                                                        return ParserResult::LexerMoved
+                                                    }
+                                                };
+
+                                            return ParserResult::Value(StmtVariant::Stmt(
+                                                ast::Stmt::ConstFunction(const_function),
+                                            ));
+                                        }
+
+                                        Ok(next_token) => {
+                                            state.token_error(
+                                                next_token.clone(),
+                                                "expected either a variable name or `function` after `const`",
+                                            );
+
+                                            return ParserResult::LexerMoved;
+                                        }
+
+                                        Err(()) => return ParserResult::LexerMoved,
+                                    }
+                                }
                                 _ => (),
                             }
                         }
@@ -661,10 +720,41 @@ fn parse_stmt(state: &mut ParserState) -> ParserResult<StmtVariant> {
                         Err(()) => ParserResult::LexerMoved,
                     }
                 }
+                Ok(token)
+                    if matches!(token.token_type(), TokenType::Identifier { identifier } if identifier.as_str() == "const") =>
+                {
+                    let const_token = state.consume().unwrap();
+                    match state.current() {
+                        Ok(token) if token.is_symbol(Symbol::Function) => {
+                            let function_token = state.consume().unwrap();
+
+                            let const_function = match expect_const_function_declaration(
+                                state,
+                                const_token,
+                                function_token,
+                            ) {
+                                Ok(const_function) => const_function,
+                                Err(()) => return ParserResult::LexerMoved,
+                            };
+
+                            ParserResult::Value(StmtVariant::Stmt(ast::Stmt::ConstFunction(
+                                const_function.with_attributes(attributes),
+                            )))
+                        }
+                        Ok(token) => {
+                            state.token_error(
+                                token.clone(),
+                                "expected `const function` after attribute",
+                            );
+                            ParserResult::LexerMoved
+                        }
+                        Err(()) => ParserResult::LexerMoved,
+                    }
+                }
                 Ok(token) => {
                     state.token_error(
                         token.clone(),
-                        "expected `function` or `local function` after attribute",
+                        "expected `function`, `local function`, or `const function` after attribute",
                     );
                     ParserResult::LexerMoved
                 }
@@ -1184,6 +1274,100 @@ fn expect_local_assignment(
     };
 
     Ok(local_assignment)
+}
+
+// `const` is a contextual keyword valid anywhere `local` is, with one difference:
+// unlike `local`, an initializer is required (`const x` with no `= ...` is an error).
+#[cfg(feature = "luau")]
+fn expect_const_assignment(
+    state: &mut ParserState,
+    const_token: TokenReference,
+) -> Result<ast::ConstAssignment, ()> {
+    let names = match one_or_more(state, parse_name_with_attributes, Symbol::Comma) {
+        ParserResult::Value(names) => names,
+        ParserResult::NotFound => {
+            unreachable!("expect_const_assignment called without upcoming identifier");
+        }
+        ParserResult::LexerMoved => return Err(()),
+    };
+
+    let mut name_list = Punctuated::new();
+    let mut type_specifiers = Vec::new();
+
+    for name in names.into_pairs() {
+        let (name, punctuation) = name.into_tuple();
+
+        type_specifiers.push(name.type_specifier);
+
+        name_list.push(match punctuation {
+            Some(punctuation) => Pair::Punctuated(name.name, punctuation),
+            None => Pair::End(name.name),
+        });
+    }
+
+    let mut const_assignment = ast::ConstAssignment {
+        const_token,
+        type_specifiers,
+        name_list,
+        equal_token: None,
+        expr_list: Punctuated::new(),
+    };
+
+    let Some(equal_token) = state.require(
+        Symbol::Equal,
+        "expected `=` after variable list (const declarations must be initialized)",
+    ) else {
+        return Ok(const_assignment);
+    };
+
+    const_assignment.equal_token = Some(equal_token.clone());
+
+    match parse_expression_list(state) {
+        ParserResult::Value(expr_list) => const_assignment.expr_list = expr_list,
+
+        ParserResult::NotFound => {
+            state.token_error(equal_token, "expected an expression");
+        }
+
+        ParserResult::LexerMoved => {}
+    };
+
+    Ok(const_assignment)
+}
+
+#[cfg(feature = "luau")]
+fn expect_const_function_declaration(
+    state: &mut ParserState,
+    const_token: TokenReference,
+    function_token: TokenReference,
+) -> Result<ast::ConstFunction, ()> {
+    let function_name = match state.current() {
+        Ok(token) if token.token_kind() == TokenKind::Identifier => state.consume().unwrap(),
+
+        Ok(token) => {
+            state.token_error(token.clone(), "expected a function name");
+            return Err(());
+        }
+
+        Err(()) => return Err(()),
+    };
+
+    let function_body = match parse_function_body(state) {
+        ParserResult::Value(function_body) => function_body,
+        ParserResult::NotFound => {
+            state.token_error(function_token, "expected a function body");
+            return Err(());
+        }
+        ParserResult::LexerMoved => return Err(()),
+    };
+
+    Ok(ast::ConstFunction {
+        attributes: Vec::new(),
+        const_token,
+        function_token,
+        name: function_name,
+        body: function_body,
+    })
 }
 
 fn expect_expression_key(
@@ -3481,22 +3665,170 @@ fn parse_attributes(state: &mut ParserState) -> ParserResult<Vec<ast::LuauAttrib
     let mut attributes = Vec::new();
 
     while let Some(at_sign) = state.consume_if(Symbol::AtSign) {
-        let name = match parse_name(state) {
-            ParserResult::Value(name) => name.name,
-            ParserResult::NotFound => {
-                state.token_error(
-                    state.current().unwrap().clone(),
-                    "expected identifier after `@`",
-                );
-                return ParserResult::LexerMoved;
+        let kind = if let Some(left_bracket) = state.consume_if(Symbol::LeftBracket) {
+            let mut items = Punctuated::new();
+
+            loop {
+                let name = match parse_name(state) {
+                    ParserResult::Value(name) => name.name,
+                    ParserResult::NotFound => {
+                        state.token_error(
+                            state.current().unwrap().clone(),
+                            "expected identifier when parsing attribute name",
+                        );
+                        return ParserResult::LexerMoved;
+                    }
+                    ParserResult::LexerMoved => return ParserResult::LexerMoved,
+                };
+
+                let params = match parse_attribute_params(state) {
+                    Ok(params) => params,
+                    Err(()) => return ParserResult::LexerMoved,
+                };
+
+                let item = ast::LuauAttributeItem { name, params };
+
+                match state.consume_if(Symbol::Comma) {
+                    Some(comma) => items.push(Pair::Punctuated(item, comma)),
+                    None => {
+                        items.push(Pair::End(item));
+                        break;
+                    }
+                }
             }
-            ParserResult::LexerMoved => return ParserResult::LexerMoved,
+
+            let Some(right_bracket) = state.require(
+                Symbol::RightBracket,
+                "expected `]` to close attribute list",
+            ) else {
+                return ParserResult::LexerMoved;
+            };
+
+            ast::LuauAttributeKind::Bracketed {
+                brackets: ContainedSpan::new(left_bracket, right_bracket),
+                attributes: items,
+            }
+        } else {
+            let name = match parse_name(state) {
+                ParserResult::Value(name) => name.name,
+                ParserResult::NotFound => {
+                    state.token_error(
+                        state.current().unwrap().clone(),
+                        "expected identifier after `@`",
+                    );
+                    return ParserResult::LexerMoved;
+                }
+                ParserResult::LexerMoved => return ParserResult::LexerMoved,
+            };
+
+            ast::LuauAttributeKind::Name(name)
         };
 
-        attributes.push(ast::LuauAttribute { at_sign, name });
+        attributes.push(ast::LuauAttribute { at_sign, kind });
     }
 
     ParserResult::Value(attributes)
+}
+
+// Parses the optional params following an attribute name inside a bracketed
+// attribute list, e.g. the `("reason")` in `@[deprecated("reason")]`, or the bare
+// `"reason"` in `@[deprecated "reason"]`. Per the Luau RFC, only literals
+// (nil/booleans/numbers/strings/table constructors) are valid here.
+#[cfg(feature = "luau")]
+fn parse_attribute_params(
+    state: &mut ParserState,
+) -> Result<Option<ast::LuauAttributeParams>, ()> {
+    if let Some(left_paren) = state.consume_if(Symbol::LeftParen) {
+        let mut arguments = Punctuated::new();
+
+        if !matches!(state.current(), Ok(token) if token.is_symbol(Symbol::RightParen)) {
+            loop {
+                let argument = parse_attribute_argument(state)?;
+
+                match state.consume_if(Symbol::Comma) {
+                    Some(comma) => arguments.push(Pair::Punctuated(argument, comma)),
+                    None => {
+                        arguments.push(Pair::End(argument));
+                        break;
+                    }
+                }
+            }
+        }
+
+        let Some(right_paren) = state.require(
+            Symbol::RightParen,
+            "expected `)` to close attribute arguments",
+        ) else {
+            return Err(());
+        };
+
+        Ok(Some(ast::LuauAttributeParams::Parens {
+            parens: ContainedSpan::new(left_paren, right_paren),
+            arguments,
+        }))
+    } else if is_attribute_argument_start(state) {
+        Ok(Some(ast::LuauAttributeParams::Literal(
+            parse_attribute_argument(state)?,
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
+#[cfg(feature = "luau")]
+fn is_attribute_argument_start(state: &mut ParserState) -> bool {
+    matches!(
+        state.current(),
+        Ok(token) if matches!(
+            token.token_type(),
+            TokenType::Symbol {
+                symbol: Symbol::Nil | Symbol::True | Symbol::False | Symbol::LeftBrace
+            } | TokenType::Number { .. }
+                | TokenType::StringLiteral { .. }
+        )
+    )
+}
+
+#[cfg(feature = "luau")]
+fn parse_attribute_argument(state: &mut ParserState) -> Result<ast::LuauAttributeArgument, ()> {
+    let Ok(current_token) = state.current() else {
+        return Err(());
+    };
+
+    match current_token.token_type() {
+        TokenType::Symbol { symbol: Symbol::Nil } => {
+            Ok(ast::LuauAttributeArgument::Nil(state.consume().unwrap()))
+        }
+        TokenType::Symbol {
+            symbol: Symbol::True,
+        } => Ok(ast::LuauAttributeArgument::True(state.consume().unwrap())),
+        TokenType::Symbol {
+            symbol: Symbol::False,
+        } => Ok(ast::LuauAttributeArgument::False(
+            state.consume().unwrap(),
+        )),
+        TokenType::Number { .. } => Ok(ast::LuauAttributeArgument::Number(
+            state.consume().unwrap(),
+        )),
+        TokenType::StringLiteral { .. } => {
+            Ok(ast::LuauAttributeArgument::Str(state.consume().unwrap()))
+        }
+        TokenType::Symbol {
+            symbol: Symbol::LeftBrace,
+        } => {
+            let left_brace = state.consume().unwrap();
+            Ok(ast::LuauAttributeArgument::Table(force_table_constructor(
+                state, left_brace,
+            )))
+        }
+        _ => {
+            state.token_error(
+                current_token.clone(),
+                "expected a literal (nil, boolean, number, string, or table) as an attribute argument",
+            );
+            Err(())
+        }
+    }
 }
 
 #[derive(Clone)]
